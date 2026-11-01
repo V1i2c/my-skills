@@ -1,3 +1,10 @@
 <resources>
     <string name="app_name">Focus Harbor</string>
+    <string name="accessibility_service_name">Focus Harbor app blocker</string>
+    <string name="accessibility_service_description">Focus Harbor checks foreground apps and supported browser address bars against the rules you create. Matching text is processed on this device only; the app has no Internet permission.</string>
+    <string name="notification_listener_name">Focus Harbor blocked notifications</string>
+    <string name="quick_block_tile_name">Quick Block</string>
+    <string name="widget_title">Quick Block</string>
+    <string name="widget_start">Start focus</string>
+    <string name="widget_stop">End Quick Block</string>
 </resources>

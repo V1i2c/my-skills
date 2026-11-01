@@ -12,7 +12,7 @@ class BlockingRulesTest {
     @Test
     fun `scheduled interval includes its start and excludes its end`() {
         val rule = ScheduleRule(
-            daysOfWeek = setOf(DayOfWeek.MONDAY),
+            daysOfWeek = setOf(DayOfWeek.MONDAY.value),
             startMinute = 9 * 60,
             endMinute = 10 * 60,
         )
@@ -26,7 +26,7 @@ class BlockingRulesTest {
     @Test
     fun `overnight interval belongs to its start day after midnight`() {
         val rule = ScheduleRule(
-            daysOfWeek = setOf(DayOfWeek.MONDAY),
+            daysOfWeek = setOf(DayOfWeek.MONDAY.value),
             startMinute = 22 * 60,
             endMinute = 6 * 60,
         )
@@ -100,10 +100,74 @@ class BlockingRulesTest {
         )
     }
 
+    @Test
+    fun `quick block timer uses monotonic time while the device clock changes`() {
+        val session = QuickBlockSession(
+            startedAtEpochMillis = 5_000L,
+            startedAtElapsedMillis = 1_000L,
+            durationMillis = 10_000L,
+        )
+
+        assertEquals(6_000L, session.remainingMillis(nowEpochMillis = 500_000L, nowElapsedMillis = 5_000L))
+    }
+
+    @Test
+    fun `allowlist allows selected packages and blocks all other packages`() {
+        val state = FocusAppState(profiles = listOf(
+            FocusProfile(
+                id = "allow-list",
+                enabled = true,
+                allowList = true,
+                appPackages = setOf("com.example.reader"),
+            ),
+        ))
+        val now = ZonedDateTime.of(2026, 1, 5, 9, 0, 0, 0, ZoneOffset.UTC)
+
+        assertFalse(BlockingDecisionEngine.shouldBlockPackage(state, "com.example.reader", now, nowElapsedMillis = 1_000L).blocked)
+        assertTrue(BlockingDecisionEngine.shouldBlockPackage(state, "com.example.social", now, nowElapsedMillis = 1_000L).blocked)
+    }
+
+    @Test
+    fun `website allowlist blocks unlisted hostnames only`() {
+        val state = FocusAppState(profiles = listOf(
+            FocusProfile(
+                id = "web-allow-list",
+                enabled = true,
+                allowList = true,
+                websiteDomains = setOf("example.org"),
+            ),
+        ))
+        val now = ZonedDateTime.of(2026, 1, 5, 9, 0, 0, 0, ZoneOffset.UTC)
+
+        assertFalse(BlockingDecisionEngine.shouldBlockWebsite(state, "docs.example.org", now, nowElapsedMillis = 1_000L).blocked)
+        assertTrue(BlockingDecisionEngine.shouldBlockWebsite(state, "social.example", now, nowElapsedMillis = 1_000L).blocked)
+    }
+
+    @Test
+    fun `quota evaluator uses the matching period record`() {
+        val profile = FocusProfile(
+            id = "weekly-limit",
+            enabled = true,
+            quotas = mapOf("com.example.reader" to UsageQuota(maximumMinutes = 10L, period = QuotaPeriod.WEEKLY)),
+        )
+        val now = ZonedDateTime.of(2026, 1, 5, 9, 0, 0, 0, ZoneOffset.UTC)
+        val dailyRecord = UsageRecord(
+            periodKey = "2026-01-05",
+            packageName = "com.example.reader",
+            period = QuotaPeriod.DAILY,
+            foregroundMillis = 30 * 60_000L,
+        )
+        val state = FocusAppState(profiles = listOf(profile), usage = listOf(dailyRecord))
+        assertFalse(BlockingDecisionEngine.shouldBlockPackage(state, "com.example.reader", now, nowElapsedMillis = 1_000L).blocked)
+
+        val weeklyRecord = dailyRecord.copy(period = QuotaPeriod.WEEKLY, foregroundMillis = 10 * 60_000L)
+        val withWeeklyUsage = state.copy(usage = listOf(dailyRecord, weeklyRecord))
+        assertTrue(BlockingDecisionEngine.shouldBlockPackage(withWeeklyUsage, "com.example.reader", now, nowElapsedMillis = 1_000L).blocked)
+    }
+
     private fun at(day: DayOfWeek, minute: Int): ZonedDateTime {
         val monday = ZonedDateTime.of(2026, 1, 5, 0, 0, 0, 0, ZoneOffset.UTC)
         val dayOffset = day.value - DayOfWeek.MONDAY.value
-        return monday.plusDays(dayOffset.toLong())
-            .plusMinutes(minute.toLong())
+        return monday.plusDays(dayOffset.toLong()).plusMinutes(minute.toLong())
     }
 }
