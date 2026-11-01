@@ -372,7 +372,7 @@ class FocusAccessibilityService : AccessibilityService() {
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.CENTER
-            title = "Focus Harbor block screen"
+            this.title = "Focus Harbor block screen"
         }
         runCatching {
             windowManager.addView(root, params)
