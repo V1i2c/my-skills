@@ -1,5 +1,6 @@
 package com.v1i2c.focusharbor.service
 
+import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.Intent
 import android.os.Build
@@ -81,6 +82,8 @@ class FocusQuickTileService : TileService() {
         tile.updateTile()
     }
 
+    // API 31–33 only expose the Intent overload; API 34+ uses the PendingIntent overload.
+    @SuppressLint("StartActivityAndCollapseDeprecated")
     private fun openMainForQuickBlock() {
         val intent = Intent(this, MainActivity::class.java)
             .setAction(MainActivity.ACTION_WIDGET_QUICK_BLOCK)
