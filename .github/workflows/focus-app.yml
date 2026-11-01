@@ -1,0 +1,58 @@
+name: Focus Harbor Android CI
+
+on:
+  push:
+    paths:
+      - "focus-app/**"
+      - ".github/workflows/focus-app.yml"
+  pull_request:
+    paths:
+      - "focus-app/**"
+      - ".github/workflows/focus-app.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: focus-harbor-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: Test and build APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 36 platform
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run domain unit tests
+        run: ./gradlew :app:testDebugUnitTest
+        working-directory: focus-app
+
+      - name: Build installable debug APK
+        run: ./gradlew :app:assembleDebug
+        working-directory: focus-app
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: focus-harbor-debug
+          path: focus-app/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
