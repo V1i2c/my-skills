@@ -1,0 +1,147 @@
+name: Focus Harbor Android CI
+
+on:
+  push:
+    paths:
+      - "focus-app/**"
+      - ".github/workflows/focus-app.yml"
+  pull_request:
+    paths:
+      - "focus-app/**"
+      - ".github/workflows/focus-app.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: focus-harbor-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: Test, lint and build APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6.1.0
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4.0.4
+
+      - name: Install Android 36 platform
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v6.4.1
+
+      - name: Run domain unit tests
+        run: |
+          set +e
+          ./gradlew :app:testDebugUnitTest --stacktrace > focus-app-test.log 2>&1
+          status=$?
+          cat focus-app-test.log
+          exit "$status"
+        working-directory: focus-app
+
+      - name: Run Android lint
+        run: |
+          set +e
+          ./gradlew :app:lintDebug --stacktrace > focus-app-lint.log 2>&1
+          status=$?
+          cat focus-app-lint.log
+          exit "$status"
+        working-directory: focus-app
+
+      - name: Build installable debug APK
+        run: |
+          set +e
+          ./gradlew :app:assembleDebug --stacktrace > focus-app-build.log 2>&1
+          status=$?
+          cat focus-app-build.log
+          exit "$status"
+        working-directory: focus-app
+
+      - name: Verify the APK has no Internet permission
+        run: |
+          apk="app/build/outputs/apk/debug/app-debug.apk"
+          aapt="$ANDROID_HOME/build-tools/36.0.0/aapt"
+          test -f "$apk"
+          set +e
+          "$aapt" dump permissions "$apk" > focus-app-permissions.log 2>&1
+          status=$?
+          cat focus-app-permissions.log
+          if [ "$status" -ne 0 ]; then exit "$status"; fi
+          if grep -q 'android.permission.INTERNET' focus-app-permissions.log; then
+            echo "ERROR: The merged APK requests android.permission.INTERNET, which violates the offline-only requirement." | tee -a focus-app-permissions.log
+            exit 1
+          fi
+          echo "Verified: the merged APK does not request android.permission.INTERNET." | tee -a focus-app-permissions.log
+        working-directory: focus-app
+
+      - name: Surface Android CI failure details
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          from html import escape
+          from pathlib import Path
+          import os
+          import xml.etree.ElementTree as ET
+
+          log_paths = [
+              Path("focus-app/focus-app-test.log"),
+              Path("focus-app/focus-app-lint.log"),
+              Path("focus-app/focus-app-build.log"),
+              Path("focus-app/focus-app-permissions.log"),
+          ]
+          details = []
+          markers = ("FAILURE:", "WHAT WENT WRONG", "EXECUTION FAILED", "FAILED", "COMPILATION ERROR", "UNRESOLVED REFERENCE", "ERROR:", "ANDROID.PERMISSION.INTERNET")
+          for log in log_paths:
+              if not log.exists():
+                  continue
+              lines = log.read_text(errors="replace").splitlines()
+              details.extend(
+                  f"{log.name}: {line}"
+                  for line in lines
+                  if line.lstrip().startswith("e:") or any(marker in line.upper() for marker in markers)
+              )
+          for report in Path("focus-app/app/build/test-results/testDebugUnitTest").glob("TEST-*.xml"):
+              try:
+                  root = ET.parse(report).getroot()
+              except ET.ParseError:
+                  continue
+              for case in root.findall("testcase"):
+                  for failure in list(case.findall("failure")) + list(case.findall("error")):
+                      details.append(f"{case.get('classname')}.{case.get('name')}: {failure.get('message', '')}")
+                      if failure.text:
+                          details.extend(failure.text.splitlines()[:12])
+          if not details:
+              existing_logs = [log for log in log_paths if log.exists()]
+              if existing_logs:
+                  fallback = existing_logs[-1]
+                  details = [f"{fallback.name}: {line}" for line in fallback.read_text(errors="replace").splitlines()[-20:]]
+              else:
+                  details = ["No test, lint, build, or APK-permission log was created"]
+          excerpt = "\n".join(details[:50])[:3_000]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## Android CI failure details\n\n<pre>")
+              summary.write(escape(excerpt))
+              summary.write("</pre>\n")
+          annotation = excerpt.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print(f"::error title=Android CI failure details::{annotation}")
+          PY
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: focus-harbor-debug
+          path: focus-app/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
