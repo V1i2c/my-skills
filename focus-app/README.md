@@ -37,7 +37,8 @@ Requirements: JDK 17, Android SDK platform 36, and Android build tools 36.0.0.
 
 ```bash
 ./gradlew :app:testDebugUnitTest
+./gradlew :app:lintDebug
 ./gradlew :app:assembleDebug
 ```
 
-GitHub Actions runs the unit tests, builds the debug APK, and publishes `focus-harbor-debug` as a short-lived workflow artifact.
+GitHub Actions runs the unit tests and Android lint, builds the debug APK, verifies the **merged APK** does not request Internet permission, and publishes `focus-harbor-debug` as a short-lived workflow artifact. See [QA_CHECKLIST.md](QA_CHECKLIST.md) for device-only release checks; accessibility-service, browser, notification, widget, and OEM behavior still needs physical-device verification.

@@ -8,8 +8,9 @@ import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import com.v1i2c.focusharbor.FocusApplication
 import com.v1i2c.focusharbor.MainActivity
-import com.v1i2c.focusharbor.domain.QuickBlockSession
 import com.v1i2c.focusharbor.domain.DomainMatcher
+import com.v1i2c.focusharbor.domain.QuickBlockSession
+import com.v1i2c.focusharbor.widget.FocusHarborWidgetProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -22,7 +23,11 @@ class FocusQuickTileService : TileService() {
 
     override fun onStartListening() {
         super.onStartListening()
-        refreshTile()
+        val repository = (application as FocusApplication).repository
+        serviceScope.launch {
+            repository.awaitReady()
+            withContext(Dispatchers.Main) { refreshTile() }
+        }
     }
 
     override fun onClick() {
@@ -35,10 +40,11 @@ class FocusQuickTileService : TileService() {
             val nowElapsed = SystemClock.elapsedRealtime()
             val running = state.quickBlock?.let { !it.isExpired(nowEpoch, nowElapsed) } == true
             if (running) {
-                repository.update { it.copy(quickBlock = null) }
+                val updated = repository.update { it.copy(quickBlock = null) }
+                repository.awaitState(updated)
             } else if (state.settings.quickBlockApps.isNotEmpty() || state.settings.quickBlockDomains.isNotEmpty()) {
                 val minutes = state.settings.quickBlockMinutes.coerceIn(1L, 365L * 24L * 60L)
-                repository.update { current ->
+                val updated = repository.update { current ->
                     current.copy(quickBlock = QuickBlockSession(
                         startedAtEpochMillis = nowEpoch,
                         startedAtElapsedMillis = nowElapsed,
@@ -47,10 +53,14 @@ class FocusQuickTileService : TileService() {
                         websiteDomains = state.settings.quickBlockDomains.mapNotNull(DomainMatcher::normalize).toSet(),
                     ))
                 }
+                repository.awaitState(updated)
             } else {
                 withContext(Dispatchers.Main) { openMainForQuickBlock() }
             }
-            withContext(Dispatchers.Main) { refreshTile() }
+            withContext(Dispatchers.Main) {
+                FocusHarborWidgetProvider.updateAll(this@FocusQuickTileService)
+                refreshTile()
+            }
         }
     }
 

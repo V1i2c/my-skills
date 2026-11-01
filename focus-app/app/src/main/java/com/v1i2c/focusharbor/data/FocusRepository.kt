@@ -11,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
@@ -39,20 +40,27 @@ class FocusRepository(context: Context) {
 
     suspend fun awaitReady() { ready.await() }
 
-    suspend fun update(transform: (FocusAppState) -> FocusAppState) {
+    suspend fun update(transform: (FocusAppState) -> FocusAppState): FocusAppState {
+        var updated: FocusAppState? = null
         store.edit { preferences ->
             val current = decode(preferences[stateKey])
             val next = transform(current).copy(schemaVersion = FocusAppState.CURRENT_SCHEMA_VERSION)
             preferences[stateKey] = json.encodeToString(next)
+            updated = next
         }
+        return requireNotNull(updated)
     }
 
-    suspend fun replace(state: FocusAppState) {
+    suspend fun replace(state: FocusAppState): FocusAppState {
+        val replacement = state.copy(schemaVersion = FocusAppState.CURRENT_SCHEMA_VERSION)
         store.edit { preferences ->
-            preferences[stateKey] = json.encodeToString(
-                state.copy(schemaVersion = FocusAppState.CURRENT_SCHEMA_VERSION),
-            )
+            preferences[stateKey] = json.encodeToString(replacement)
         }
+        return replacement
+    }
+
+    suspend fun awaitState(expected: FocusAppState) {
+        state.first { it == expected }
     }
 
     fun encode(state: FocusAppState): String = json.encodeToString(state)

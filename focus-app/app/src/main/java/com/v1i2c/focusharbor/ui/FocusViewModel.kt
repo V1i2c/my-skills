@@ -1,13 +1,16 @@
 package com.v1i2c.focusharbor.ui
 
+import android.content.ComponentName
 import android.content.Context
 import android.os.SystemClock
+import android.service.quicksettings.TileService
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.v1i2c.focusharbor.data.FocusRepository
 import com.v1i2c.focusharbor.data.StateOperations
 import com.v1i2c.focusharbor.domain.BackupCodec
+import com.v1i2c.focusharbor.domain.DomainMatcher
 import com.v1i2c.focusharbor.domain.FocusAppState
 import com.v1i2c.focusharbor.domain.FocusProfile
 import com.v1i2c.focusharbor.domain.PinHasher
@@ -17,8 +20,8 @@ import com.v1i2c.focusharbor.domain.StrictModeRequirements
 import com.v1i2c.focusharbor.domain.StrictModeSession
 import com.v1i2c.focusharbor.domain.StrictReleaseContext
 import com.v1i2c.focusharbor.domain.WebsiteCsvCodec
-import com.v1i2c.focusharbor.domain.DomainMatcher
 import com.v1i2c.focusharbor.platform.AndroidTriggers
+import com.v1i2c.focusharbor.service.FocusQuickTileService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -148,7 +151,7 @@ class FocusViewModel(
         val nowEpoch = System.currentTimeMillis()
         val nowElapsed = SystemClock.elapsedRealtime()
         viewModelScope.launch {
-            repository.update { current ->
+            val updated = repository.update { current ->
                 current.copy(
                     quickBlock = QuickBlockSession(
                         startedAtEpochMillis = nowEpoch,
@@ -159,14 +162,16 @@ class FocusViewModel(
                     ),
                 )
             }
-            refreshWidget()
+            repository.awaitState(updated)
+            refreshQuickBlockSurfaces()
         }
     }
 
     fun stopQuickBlock() {
         viewModelScope.launch {
-            repository.update { it.copy(quickBlock = null) }
-            refreshWidget()
+            val updated = repository.update { it.copy(quickBlock = null) }
+            repository.awaitState(updated)
+            refreshQuickBlockSurfaces()
         }
     }
 
@@ -177,8 +182,9 @@ class FocusViewModel(
         val nowEpoch = System.currentTimeMillis()
         val nowElapsed = SystemClock.elapsedRealtime()
         if (session != null && !session.isExpired(nowEpoch, nowElapsed)) {
-            repository.update { it.copy(quickBlock = null) }
-            refreshWidget()
+            val updated = repository.update { it.copy(quickBlock = null) }
+            repository.awaitState(updated)
+            refreshQuickBlockSurfaces()
             return false
         }
         if (current.settings.quickBlockApps.isEmpty() && current.settings.quickBlockDomains.isEmpty()) {
@@ -186,7 +192,7 @@ class FocusViewModel(
             return false
         }
         val minutes = current.settings.quickBlockMinutes.coerceIn(1L, 365L * 24L * 60L)
-        repository.update {
+        val updated = repository.update {
             it.copy(quickBlock = QuickBlockSession(
                 startedAtEpochMillis = nowEpoch,
                 startedAtElapsedMillis = nowElapsed,
@@ -195,7 +201,8 @@ class FocusViewModel(
                 websiteDomains = current.settings.quickBlockDomains.mapNotNull(DomainMatcher::normalize).toSet(),
             ))
         }
-        refreshWidget()
+        repository.awaitState(updated)
+        refreshQuickBlockSurfaces()
         return true
     }
 
@@ -203,8 +210,14 @@ class FocusViewModel(
         viewModelScope.launch { toggleQuickBlockFromSystemSurface() }
     }
 
-    private fun refreshWidget() {
+    private fun refreshQuickBlockSurfaces() {
         runCatching { com.v1i2c.focusharbor.widget.FocusHarborWidgetProvider.updateAll(appContext) }
+        runCatching {
+            TileService.requestListeningState(
+                appContext,
+                ComponentName(appContext, FocusQuickTileService::class.java),
+            )
+        }
     }
 
     fun startStrictMode(profileId: String) {
@@ -362,8 +375,9 @@ class FocusViewModel(
 
     fun updateSettings(transform: (FocusAppState) -> FocusAppState) {
         viewModelScope.launch {
-            repository.update(transform)
-            refreshWidget()
+            val updated = repository.update(transform)
+            repository.awaitState(updated)
+            refreshQuickBlockSurfaces()
         }
     }
 
@@ -379,7 +393,9 @@ class FocusViewModel(
             }
             try {
                 val imported = withContext(Dispatchers.Default) { BackupCodec.decode(raw) }
-                repository.replace(imported)
+                val restored = repository.replace(imported)
+                repository.awaitState(restored)
+                refreshQuickBlockSurfaces()
                 showMessage("Local backup imported.")
             } catch (cancelled: CancellationException) {
                 throw cancelled

@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   android:
-    name: Test and build APK
+    name: Test, lint and build APK
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -51,6 +51,15 @@ jobs:
           exit "$status"
         working-directory: focus-app
 
+      - name: Run Android lint
+        run: |
+          set +e
+          ./gradlew :app:lintDebug --stacktrace > focus-app-lint.log 2>&1
+          status=$?
+          cat focus-app-lint.log
+          exit "$status"
+        working-directory: focus-app
+
       - name: Build installable debug APK
         run: |
           set +e
@@ -60,7 +69,24 @@ jobs:
           exit "$status"
         working-directory: focus-app
 
-      - name: Surface Gradle failure details
+      - name: Verify the APK has no Internet permission
+        run: |
+          apk="app/build/outputs/apk/debug/app-debug.apk"
+          aapt="$ANDROID_HOME/build-tools/36.0.0/aapt"
+          test -f "$apk"
+          set +e
+          "$aapt" dump permissions "$apk" > focus-app-permissions.log 2>&1
+          status=$?
+          cat focus-app-permissions.log
+          if [ "$status" -ne 0 ]; then exit "$status"; fi
+          if grep -q 'android.permission.INTERNET' focus-app-permissions.log; then
+            echo "ERROR: The merged APK requests android.permission.INTERNET, which violates the offline-only requirement." | tee -a focus-app-permissions.log
+            exit 1
+          fi
+          echo "Verified: the merged APK does not request android.permission.INTERNET." | tee -a focus-app-permissions.log
+        working-directory: focus-app
+
+      - name: Surface Android CI failure details
         if: failure()
         run: |
           python3 - <<'PY'
@@ -69,14 +95,23 @@ jobs:
           import os
           import xml.etree.ElementTree as ET
 
-          build_log = Path("focus-app/focus-app-build.log")
-          test_log = Path("focus-app/focus-app-test.log")
-          log = build_log if build_log.exists() else test_log
+          log_paths = [
+              Path("focus-app/focus-app-test.log"),
+              Path("focus-app/focus-app-lint.log"),
+              Path("focus-app/focus-app-build.log"),
+              Path("focus-app/focus-app-permissions.log"),
+          ]
           details = []
-          if log.exists():
+          markers = ("FAILURE:", "WHAT WENT WRONG", "EXECUTION FAILED", "FAILED", "COMPILATION ERROR", "UNRESOLVED REFERENCE", "ERROR:", "ANDROID.PERMISSION.INTERNET")
+          for log in log_paths:
+              if not log.exists():
+                  continue
               lines = log.read_text(errors="replace").splitlines()
-              markers = ("FAILURE:", "WHAT WENT WRONG", "EXECUTION FAILED", "FAILED", "COMPILATION ERROR", "UNRESOLVED REFERENCE", "ERROR:")
-              details.extend(line for line in lines if line.lstrip().startswith("e:") or any(marker in line.upper() for marker in markers))
+              details.extend(
+                  f"{log.name}: {line}"
+                  for line in lines
+                  if line.lstrip().startswith("e:") or any(marker in line.upper() for marker in markers)
+              )
           for report in Path("focus-app/app/build/test-results/testDebugUnitTest").glob("TEST-*.xml"):
               try:
                   root = ET.parse(report).getroot()
@@ -88,14 +123,19 @@ jobs:
                       if failure.text:
                           details.extend(failure.text.splitlines()[:12])
           if not details:
-              details = lines[-20:] if log.exists() else ["No Gradle log file was created"]
+              existing_logs = [log for log in log_paths if log.exists()]
+              if existing_logs:
+                  fallback = existing_logs[-1]
+                  details = [f"{fallback.name}: {line}" for line in fallback.read_text(errors="replace").splitlines()[-20:]]
+              else:
+                  details = ["No test, lint, build, or APK-permission log was created"]
           excerpt = "\n".join(details[:50])[:3_000]
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
-              summary.write("## Gradle failure details\n\n<pre>")
+              summary.write("## Android CI failure details\n\n<pre>")
               summary.write(escape(excerpt))
               summary.write("</pre>\n")
           annotation = excerpt.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-          print(f"::error title=Gradle failure details::{annotation}")
+          print(f"::error title=Android CI failure details::{annotation}")
           PY
 
       - name: Upload APK
